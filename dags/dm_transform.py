@@ -15,7 +15,7 @@ import datetime
 import logging
 from pathlib import Path
 
-from airflow.exceptions import AirflowException
+from airflow.exceptions import AirflowException, AirflowSkipException
 from airflow.providers.clickhousedb.hooks.clickhouse import ClickHouseHook
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
 from airflow.sdk import Variable, dag, task, task_group
@@ -199,6 +199,67 @@ def dm_transform():
         rebuild >> replace
 
     purchase_vs_orders()
+
+    @task_group(group_id="top_pages_daily")
+    def top_pages_daily():
+        """Топ страниц: пересборка событий с учетом пропущенных дней."""
+
+        @task
+        def scope() -> dict[str, object]:
+            """Спросить у хранилища, какие дни пересобирает запуск."""
+            query = (SQL_ROOT / "dm" / "top_pages_daily_scope.sql").read_text(
+                encoding="utf-8"
+            )
+            hook = ClickHouseHook(clickhouse_conn_id=CLICKHOUSE_CONNECTION)
+            row = hook.get_first(query)
+
+            first_day, last_day = row
+            if last_day is None:
+                raise AirflowException(
+                    "DDS пуст; "
+                    "дождитесь загрузки слепка и сначала выполните dds_transform"
+                )
+            if first_day is None:
+                raise AirflowSkipException("все прожитые дни уже собраны")
+
+            days = _days(first_day, last_day)
+            logging.info(
+                "объем пересборки: %s … %s, дней %d",
+                first_day,
+                last_day,
+                len(days),
+            )
+            return {
+                "first_day": first_day.isoformat(),
+                "last_day": last_day.isoformat(),
+                "days": days,
+            }
+
+        days = scope()
+
+        rebuild = SQLExecuteQueryOperator(
+            task_id="rebuild",
+            conn_id=CLICKHOUSE_CONNECTION,
+            sql="dm/top_pages_daily_rebuild.sql",
+            parameters={
+                "load_id": "{{ run_id }}",
+                "first_day": days["first_day"],
+                "last_day": days["last_day"],
+            },
+            split_statements=True,
+            do_xcom_push=False,
+        )
+
+        replace = SQLExecuteQueryOperator.partial(
+            task_id="replace",
+            conn_id=CLICKHOUSE_CONNECTION,
+            sql="dm/top_pages_daily_replace.sql",
+            do_xcom_push=False,
+        ).expand_kwargs(replacements(days))
+
+        rebuild >> replace
+
+    top_pages_daily()
 
     SQLExecuteQueryOperator(
         task_id="daily_traffic",

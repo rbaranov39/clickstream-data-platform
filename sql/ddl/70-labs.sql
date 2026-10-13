@@ -94,3 +94,75 @@ SELECT
 	_load_id,
 	_load_ts
 FROM dm.top_pages_daily_dist;
+
+CREATE TABLE IF NOT EXISTS dm.session_overview_rep
+ON CLUSTER clickstream_cluster
+(
+	report_date Date,
+	device_category LowCardinality(String),
+	sessions UInt64,
+	visitors UInt64,
+	bounce_sessions UInt64,
+	purchase_sessions UInt64,
+	duration_seconds_total UInt64,
+	events_total UInt64,
+	pageviews UInt64,
+	cart_adds UInt64,
+	purchases UInt64,
+	_load_id String,
+	_load_ts DateTime64(3, 'UTC')
+)
+ENGINE = ReplicatedMergeTree(
+	'/clickhouse/tables/{shard}/{database}/{table}',
+	'{replica}'
+)
+PARTITION BY report_date
+ORDER BY (report_date, device_category);
+
+CREATE TABLE IF NOT EXISTS dm.session_overview_dist
+ON CLUSTER clickstream_cluster
+AS dm.session_overview_rep
+ENGINE = Distributed(
+	'clickstream_cluster',
+	'dm',
+	'session_overview_rep',
+	cityHash64(report_date, device_category)
+);
+
+CREATE TABLE IF NOT EXISTS dm.session_overview_stage_rep
+ON CLUSTER clickstream_cluster
+AS dm.session_overview_rep
+ENGINE = ReplicatedMergeTree(
+	'/clickhouse/tables/{shard}/{database}/{table}',
+	'{replica}'
+)
+PARTITION BY report_date
+ORDER BY (report_date, device_category);
+
+CREATE TABLE IF NOT EXISTS dm.session_overview_stage_dist
+ON CLUSTER clickstream_cluster
+AS dm.session_overview_stage_rep
+ENGINE = Distributed(
+	'clickstream_cluster',
+	'dm',
+	'session_overview_stage_rep',
+	cityHash64(report_date, device_category)
+);
+
+CREATE VIEW IF NOT EXISTS dm.session_overview_v
+ON CLUSTER clickstream_cluster AS
+SELECT
+	report_date,
+	device_category,
+	sessions,
+	visitors,
+	bounce_sessions,
+	purchase_sessions,
+	duration_seconds_total,
+	events_total,
+	pageviews,
+	cart_adds,
+	purchases,
+	_load_id,
+	_load_ts
+FROM dm.session_overview_dist;

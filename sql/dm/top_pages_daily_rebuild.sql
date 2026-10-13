@@ -25,6 +25,6 @@ FROM
 WHERE event_date >= {first_day:Date} AND event_date <= {last_day:Date}
 GROUP BY report_date, page_path
 
-SETTINGS 
+SETTINGS
     distributed_foreground_insert = 1,
     parallel_distributed_insert_select = 0;

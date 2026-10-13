@@ -261,6 +261,67 @@ def dm_transform():
 
     top_pages_daily()
 
+    @task_group(group_id="session_overview")
+    def session_overview():
+        """Обзор сессий: пересборка сессий с учетом пропущенных дней."""
+
+        @task
+        def scope() -> dict[str, object]:
+            """Спросить у хранилища, какие дни пересобирает запуск."""
+            query = (SQL_ROOT / "dm" / "session_overview_scope.sql").read_text(
+                encoding="utf-8"
+            )
+            hook = ClickHouseHook(clickhouse_conn_id=CLICKHOUSE_CONNECTION)
+            row = hook.get_first(query)
+
+            first_day, last_day = row
+            if last_day is None:
+                raise AirflowException(
+                    "DDS пуст; "
+                    "дождитесь загрузки слепка и сначала выполните dds_transform"
+                )
+            if first_day is None:
+                raise AirflowSkipException("все прожитые дни уже собраны")
+
+            days = _days(first_day, last_day)
+            logging.info(
+                "объем пересборки: %s … %s, дней %d",
+                first_day,
+                last_day,
+                len(days),
+            )
+            return {
+                "first_day": first_day.isoformat(),
+                "last_day": last_day.isoformat(),
+                "days": days,
+            }
+
+        days = scope()
+
+        rebuild = SQLExecuteQueryOperator(
+            task_id="rebuild",
+            conn_id=CLICKHOUSE_CONNECTION,
+            sql="dm/session_overview_rebuild.sql",
+            parameters={
+                "load_id": "{{ run_id }}",
+                "first_day": days["first_day"],
+                "last_day": days["last_day"],
+            },
+            split_statements=True,
+            do_xcom_push=False,
+        )
+
+        replace = SQLExecuteQueryOperator.partial(
+            task_id="replace",
+            conn_id=CLICKHOUSE_CONNECTION,
+            sql="dm/session_overview_replace.sql",
+            do_xcom_push=False,
+        ).expand_kwargs(replacements(days))
+
+        rebuild >> replace
+
+    session_overview()
+
     SQLExecuteQueryOperator(
         task_id="daily_traffic",
         conn_id=CLICKHOUSE_CONNECTION,

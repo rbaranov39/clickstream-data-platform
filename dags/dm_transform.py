@@ -322,6 +322,48 @@ def dm_transform():
 
     session_overview()
 
+    @task_group(group_id="dq_errors_daily")
+    def dq_errors_daily():
+        """Ошибки качества данных: пересборка только существующих дней."""
+
+        @task
+        def scope() -> dict[str, object]:
+            """Спросить у хранилища, какие дни пересобирает запуск."""
+            query = (SQL_ROOT / "dm" / "dq_errors_daily_scope.sql").read_text(
+                encoding="utf-8"
+            )
+            hook = ClickHouseHook(clickhouse_conn_id=CLICKHOUSE_CONNECTION)
+            rows = hook.get_records(query)
+
+            if not rows:
+                raise AirflowSkipException("нет ошибок для пересборки")
+
+            days = [row[0].isoformat() for row in rows]
+            logging.info("объем пересборки: %d дней", len(days))
+            return {"days": days}
+
+        days = scope()
+
+        rebuild = SQLExecuteQueryOperator(
+            task_id="rebuild",
+            conn_id=CLICKHOUSE_CONNECTION,
+            sql="dm/dq_errors_daily_rebuild.sql",
+            parameters={"load_id": "{{ run_id }}"},
+            split_statements=True,
+            do_xcom_push=False,
+        )
+
+        replace = SQLExecuteQueryOperator.partial(
+            task_id="replace",
+            conn_id=CLICKHOUSE_CONNECTION,
+            sql="dm/dq_errors_daily_replace.sql",
+            do_xcom_push=False,
+        ).expand_kwargs(replacements(days))
+
+        days >> rebuild >> replace
+
+    dq_errors_daily()
+
     SQLExecuteQueryOperator(
         task_id="daily_traffic",
         conn_id=CLICKHOUSE_CONNECTION,

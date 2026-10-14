@@ -166,3 +166,61 @@ SELECT
 	_load_id,
 	_load_ts
 FROM dm.session_overview_dist;
+
+CREATE TABLE IF NOT EXISTS dm.dq_errors_daily_rep
+ON CLUSTER clickstream_cluster
+(
+	load_date Date,
+	source LowCardinality(String),
+	error_class LowCardinality(String),
+	error_rows UInt64,
+	_load_id String,
+	_load_ts DateTime64(3, 'UTC')
+)
+ENGINE = ReplicatedMergeTree(
+	'/clickhouse/tables/{shard}/{database}/{table}',
+	'{replica}'
+)
+PARTITION BY load_date
+ORDER BY (load_date, source, error_class);
+
+CREATE TABLE IF NOT EXISTS dm.dq_errors_daily_dist
+ON CLUSTER clickstream_cluster
+AS dm.dq_errors_daily_rep
+ENGINE = Distributed(
+	'clickstream_cluster',
+	'dm',
+	'dq_errors_daily_rep',
+	cityHash64(load_date, source, error_class)
+);
+
+CREATE TABLE IF NOT EXISTS dm.dq_errors_daily_stage_rep
+ON CLUSTER clickstream_cluster
+AS dm.dq_errors_daily_rep
+ENGINE = ReplicatedMergeTree(
+	'/clickhouse/tables/{shard}/{database}/{table}',
+	'{replica}'
+)
+PARTITION BY load_date
+ORDER BY (load_date, source, error_class);
+
+CREATE TABLE IF NOT EXISTS dm.dq_errors_daily_stage_dist
+ON CLUSTER clickstream_cluster
+AS dm.dq_errors_daily_stage_rep
+ENGINE = Distributed(
+	'clickstream_cluster',
+	'dm',
+	'dq_errors_daily_stage_rep',
+	cityHash64(load_date, source, error_class)
+);
+
+CREATE VIEW IF NOT EXISTS dm.dq_errors_daily_v
+ON CLUSTER clickstream_cluster AS
+SELECT
+	load_date,
+	source,
+	error_class,
+	error_rows,
+	_load_id,
+	_load_ts
+FROM dm.dq_errors_daily_dist;

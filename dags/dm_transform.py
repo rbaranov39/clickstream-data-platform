@@ -364,6 +364,67 @@ def dm_transform():
 
     dq_errors_daily()
 
+    @task_group(group_id="utm_effectiveness")
+    def utm_effectiveness():
+        """Эффективность UTM: пересборка только отсутствующих дней."""
+
+        @task
+        def scope() -> dict[str, object]:
+            """Спросить у хранилища, какие дни пересобирает запуск."""
+            query = (SQL_ROOT / "dm" / "utm_effectiveness_scope.sql").read_text(
+                encoding="utf-8"
+            )
+            hook = ClickHouseHook(clickhouse_conn_id=CLICKHOUSE_CONNECTION)
+            row = hook.get_first(query)
+
+            first_day, last_day = row
+            if last_day is None:
+                raise AirflowException(
+                    "DDS пуст; "
+                    "дождитесь загрузки слепка и сначала выполните dds_transform"
+                )
+            if first_day is None:
+                raise AirflowSkipException("все прожитые дни уже собраны")
+
+            days = _days(first_day, last_day)
+            logging.info(
+                "объем пересборки: %s … %s, дней %d",
+                first_day,
+                last_day,
+                len(days),
+            )
+            return {
+                "first_day": first_day.isoformat(),
+                "last_day": last_day.isoformat(),
+                "days": days,
+            }
+
+        days = scope()
+
+        rebuild = SQLExecuteQueryOperator(
+            task_id="rebuild",
+            conn_id=CLICKHOUSE_CONNECTION,
+            sql="dm/utm_effectiveness_rebuild.sql",
+            parameters={
+                "load_id": "{{ run_id }}",
+                "first_day": days["first_day"],
+                "last_day": days["last_day"],
+            },
+            split_statements=True,
+            do_xcom_push=False,
+        )
+
+        replace = SQLExecuteQueryOperator.partial(
+            task_id="replace",
+            conn_id=CLICKHOUSE_CONNECTION,
+            sql="dm/utm_effectiveness_replace.sql",
+            do_xcom_push=False,
+        ).expand_kwargs(replacements(days))
+
+        rebuild >> replace
+
+    utm_effectiveness()
+
     SQLExecuteQueryOperator(
         task_id="daily_traffic",
         conn_id=CLICKHOUSE_CONNECTION,

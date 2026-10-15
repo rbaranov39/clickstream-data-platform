@@ -224,3 +224,71 @@ SELECT
 	_load_id,
 	_load_ts
 FROM dm.dq_errors_daily_dist;
+
+CREATE TABLE IF NOT EXISTS dm.utm_effectiveness_rep
+ON CLUSTER clickstream_cluster
+(
+	report_date Date,
+	utm_source LowCardinality(String),
+	utm_medium LowCardinality(String),
+	utm_campaign String,
+	visitors UInt64,
+	pageviews UInt64,
+	add_to_carts UInt64,
+	purchases UInt64,
+	declared_revenue Decimal(18, 2),
+	_load_id String,
+	_load_ts DateTime64(3, 'UTC')
+)
+ENGINE = ReplicatedMergeTree(
+	'/clickhouse/tables/{shard}/{database}/{table}',
+	'{replica}'
+)
+PARTITION BY report_date
+ORDER BY (report_date, utm_source, utm_medium, utm_campaign);
+
+CREATE TABLE IF NOT EXISTS dm.utm_effectiveness_dist
+ON CLUSTER clickstream_cluster
+AS dm.utm_effectiveness_rep
+ENGINE = Distributed(
+	'clickstream_cluster',
+	'dm',
+	'utm_effectiveness_rep',
+	cityHash64(report_date, utm_source, utm_medium, utm_campaign)
+);
+
+CREATE TABLE IF NOT EXISTS dm.utm_effectiveness_stage_rep
+ON CLUSTER clickstream_cluster
+AS dm.utm_effectiveness_rep
+ENGINE = ReplicatedMergeTree(
+	'/clickhouse/tables/{shard}/{database}/{table}',
+	'{replica}'
+)
+PARTITION BY report_date
+ORDER BY (report_date, utm_source, utm_medium, utm_campaign);
+
+CREATE TABLE IF NOT EXISTS dm.utm_effectiveness_stage_dist
+ON CLUSTER clickstream_cluster
+AS dm.utm_effectiveness_stage_rep
+ENGINE = Distributed(
+	'clickstream_cluster',
+	'dm',
+	'utm_effectiveness_stage_rep',
+	cityHash64(report_date, utm_source, utm_medium, utm_campaign)
+);
+
+CREATE VIEW IF NOT EXISTS dm.utm_effectiveness_v
+ON CLUSTER clickstream_cluster AS
+SELECT
+	report_date,
+	utm_source,
+	utm_medium,
+	utm_campaign,
+	visitors,
+	pageviews,
+	add_to_carts,
+	purchases,
+	declared_revenue,
+	_load_id,
+	_load_ts
+FROM dm.utm_effectiveness_dist;

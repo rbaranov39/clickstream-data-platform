@@ -291,7 +291,23 @@ def dq_check():
     traffic = build_sql_check.override(task_id="build_daily_traffic_vs_dds")(
         "daily_traffic_vs_dds", "daily_traffic_vs_dds.sql"
     )
-    builders = [sessions, classes, revenue, purchases, traffic]
+    order_items_total = build_sql_check.override(task_id="build_order_items_total")(
+        "order_items_total",
+        "order_items_total.sql",
+    )
+    orders_vs_ods = build_sql_check.override(task_id="build_orders_vs_ods")(
+        "orders_vs_ods",
+        "orders_vs_ods.sql",
+    )
+    builders = [
+        sessions,
+        classes,
+        revenue,
+        purchases,
+        traffic,
+        order_items_total,
+        orders_vs_ods,
+    ]
     prepare >> builders
 
     days = publication_scope()
@@ -311,6 +327,14 @@ def dq_check():
     classes_assertion = assert_check.override(task_id="classes_vs_inventory")(
         "classes_vs_inventory", classes
     )
+    order_items_total_assertion = assert_check.override(task_id="order_items_total")(
+        "order_items_total",
+        order_items_total,
+    )
+    orders_vs_ods_assertion = assert_check.override(task_id="orders_vs_ods")(
+        "orders_vs_ods",
+        orders_vs_ods,
+    )
 
     @task_group(group_id="marts_vs_dds")
     def assert_marts():
@@ -326,7 +350,13 @@ def dq_check():
             ),
         ]
 
-    assertions = [sessions_assertion, classes_assertion, *assert_marts()]
+    assertions = [
+        sessions_assertion,
+        classes_assertion,
+        order_items_total_assertion,
+        orders_vs_ods_assertion,
+        *assert_marts(),
+    ]
     remove_stale = drop_stale_partitions()
     replace >> remove_stale >> assertions
 

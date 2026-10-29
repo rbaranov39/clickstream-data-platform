@@ -1,0 +1,29 @@
+services:
+  git-sync:
+    image: registry.k8s.io/git-sync/git-sync:v4.7.1
+    restart: unless-stopped
+    user: "0:0"
+    environment:
+      GITSYNC_REPO: https://github.com/rbaranov39/clickstream-data-platform.git
+      GITSYNC_REF: main
+      GITSYNC_ROOT: /git
+      GITSYNC_LINK: current
+      GITSYNC_PERIOD: 10s
+      GITSYNC_DEPTH: "1"
+    volumes:
+      - git_sync_repo:/git
+
+  airflow-dag-processor:
+    environment:
+      AIRFLOW__CORE__DAGS_FOLDER: /git/current/dags
+    volumes:
+      - git_sync_repo:/git:ro
+
+  airflow-scheduler:
+    environment:
+      AIRFLOW__CORE__DAGS_FOLDER: /git/current/dags
+    volumes:
+      - git_sync_repo:/git:ro
+
+volumes:
+  git_sync_repo:
